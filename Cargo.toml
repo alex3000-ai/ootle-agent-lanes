@@ -1,0 +1,32 @@
+# Ootle Agent Lanes templates (Rust -> wasm32-unknown-unknown).
+#
+# Build and test with rustup's toolchain first on PATH (the test harness shells out to `cargo` and
+# needs the wasm32-unknown-unknown target):
+#   PATH="$HOME/.cargo/bin:$PATH" cargo test
+[workspace]
+resolver = "2"
+members = ["governance", "registry", "ledger", "tests"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+
+[workspace.dependencies]
+tari_template_lib = "0.35"
+minicbor = { version = "2.3", default-features = false, features = ["alloc", "derive"] }
+tari_template_test_tooling = "0.47"
+tari_ootle_transaction = "0.47"
+tari_ootle_common_types = "0.47"
+tari_engine_types = "0.47"
+tari_template_lib_types = "0.35"
+# =0.24.0: tari_template_test_tooling 0.47.0 does not compile against 0.24.1 (ambiguous
+# `RistrettoSecretKey::from(123)` after 0.24.1 added `From<u128>`).
+tari_crypto = "=0.24.0"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
