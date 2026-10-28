@@ -108,6 +108,7 @@ Deposits, claims, closes, releases and withdrawals are ordinary manifests, run w
 | `demo/05-request-close.rs` | buyer | starts the close window |
 | `demo/06-finalize-close.rs` | anyone | settles the lane once the window has passed |
 | `demo/07-withdraw.rs` | buyer | takes unallocated funds back out (`--var amount=<microtari>`) |
+| `demo/08-fund-lane.rs` | buyer | adds escrow to an open lane (`--var lane_id=… --var amount=…`) |
 
 Every write dry-runs first; leave out `--live` to only dry-run. The paying account needs revealed tTARI on hand:
 the fee ceiling (15,000 µT for the client, 20,000 for the manifests) during the dry run, then the real fee.
