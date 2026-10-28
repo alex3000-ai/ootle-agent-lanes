@@ -1,5 +1,5 @@
 // The buyer starts closing a lane. The provider can still claim during the close window (6 epochs on
-// Esmeralda); after that anyone can finalize it (06-finalize-close.rs).
+// Esmeralda); after that anyone can finalize it (v0.2-finalize-close.rs).
 fn fee_main() {
     let buyer = var!["buyer"];
     buyer.pay_fee(var!["max_fee"]);

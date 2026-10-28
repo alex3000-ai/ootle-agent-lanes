@@ -1,15 +1,17 @@
 {
   "network": "esmeralda",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "deployed": "2026-10-28",
   "indexer": "https://ootle-indexer-a.tari.com",
   "templates": {
-    "LaneLedger": "template_b20c12261abf5ca6f00ded5756f41d9ec6dab4ffba95ce840cfd62c635d04b62"
+    "LaneLedger": "template_2d14a6b304baf4660ec6530cee0fee98fdd6dbd8833a7fb14d589450db0882aa"
   },
   "components": {
-    "ledger": "component_ef847a73c5db04906cbe3a95c09e15229a9b8ac486a017139596f652daa33dac"
+    "ledger": "component_ade394f14d3429a65c1d15537d85b2babaf993cb8da2975a6cc481652f2a191b"
   },
-  "params": { "lane_close_epochs": 6 },
+  "params": {
+    "lane_close_epochs": 6
+  },
   "payment_resource": "resource_0101010101010101010101010101010101010101010101010101010101010101",
   "directory": {
     "repo": "https://github.com/alex3000-ai/ootle-agent-directory",
@@ -17,9 +19,9 @@
     "cards_resource": "resource_28dec551986103afdd74fb31d22ef13e301ee80c28d6eb56bfec2445272ae278"
   },
   "transactions": {
-    "publish_ledger": "8996dc200be151eb4fb23a596ed9c60702ed2c250af41b53f82867c2a0e0df6c",
-    "create_ledger": "dd649cb4159536affdadf24b37cd43bdef1b7b457653ed7f6ed6909fe6f456e9",
-    "pause_v0_1": "c83bf47fa77a610701104339b434171b690cec6e3acf32cb978af7853cda9d76"
+    "pause_v0_1": "c83bf47fa77a610701104339b434171b690cec6e3acf32cb978af7853cda9d76",
+    "publish_ledger": "447489ad0541b8558a02733691cd37ea56e2cd7f53cb7d6dda7b976f8c096a3d",
+    "create_ledger": "106097128775821e510e80edff6d9d67639d186cbfe470277493c0ab2edf4ac8"
   },
   "superseded": {
     "note": "v0.1 (2026-10-26) had an admin badge that could change fees, pause, ban providers and appoint attesters. Its governance is paused, so no new lanes open there; balances can still be withdrawn. Do not use.",
@@ -32,5 +34,13 @@
     "component_ed14de2474cf07f45fdc8bbc05f1fbe6931580634e013650856ccf0d3d3483e2": "v0.1 ledger",
     "component_917424d6d7bd5396b486e3bb258ae43dc5ca4b95c819b3b453d563908c63a51f": "first ledger; empty",
     "resource_e5c3c0441352d203608e04ffe0fde83d726161ef304b1c686ff84af2e61789bc": "v0.1 admin badge (controls only the paused governance)"
-  }
+  },
+  "v0_2": {
+    "note": "v0.2 (2026-10-28): one map of lanes and buyer balances that every call loads, so fees grow ~155 µT per lane ever opened. Frozen: no new lanes should open there; balances can still be withdrawn and open lanes closed.",
+    "template": "template_b20c12261abf5ca6f00ded5756f41d9ec6dab4ffba95ce840cfd62c635d04b62",
+    "ledger": "component_ef847a73c5db04906cbe3a95c09e15229a9b8ac486a017139596f652daa33dac",
+    "publish": "8996dc200be151eb4fb23a596ed9c60702ed2c250af41b53f82867c2a0e0df6c",
+    "create": "dd649cb4159536affdadf24b37cd43bdef1b7b457653ed7f6ed6909fe6f456e9"
+  },
+  "lanes_resource": "resource_ada245240b125623eaa91230ad3e6a5dc0ac61583b3974d0dcfb6eaae6f9098b"
 }

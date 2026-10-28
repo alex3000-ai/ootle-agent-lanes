@@ -3,7 +3,7 @@
 //! github.com/alex3000-ai/ootle-agent-directory (see `DIRECTORY_SRC`).
 
 use agent_directory::{register_message, retire_message, rotate_message, DIRECTORY_DOMAIN};
-use lanes_ledger::{lane_voucher_message, LANE_VOUCHER_DOMAIN, LISTING_MAX};
+use lanes_ledger::{lane_voucher_message, LaneInfo, LaneState, LANE_VOUCHER_DOMAIN, PAGE_SIZE};
 use ootle_byte_type::ToByteType;
 use tari_crypto::{
     keys::{PublicKey as _, SecretKey as _},
@@ -134,21 +134,28 @@ impl Network {
         self.test.execute_expect_success(tx, vec![provider.party.proof.clone()]);
     }
 
-    fn deposit(&mut self, buyer: &Party, amount: u64) {
-        let transaction = self
-            .test
+    /// Builds a transaction from `buyer`'s account that withdraws `amount` into the workspace as "funds" and
+    /// calls `method` with `args` followed by the funds.
+    fn funded_call(&self, buyer: &Party, amount: u64, method: &str, mut args: Vec<NamedArg>) -> Transaction {
+        args.push(NamedArg::Workspace("funds".into()));
+        self.test
             .transaction()
             .call_method(buyer.account, "withdraw", args![TARI_TOKEN, amount])
             .put_last_instruction_output_on_workspace("funds")
-            .call_method(self.ledger, "deposit", args![Workspace("funds")])
+            .call_method(self.ledger, method, args)
             .finish()
-            .seal(&buyer.key);
-        self.test.execute_expect_success(transaction, vec![buyer.proof.clone()]);
+            .seal(&buyer.key)
     }
 
     fn open_lane(&mut self, buyer: &Party, provider: &Provider, amount: u64) -> u64 {
-        self.signed_call(buyer, "open_lane", args![provider.name.as_str(), Amount::from(amount), buyer.public_key()]);
-        self.test.return_values()[0].decoded::<u64>().expect("lane id")
+        let tx = self.funded_call(buyer, amount, "open_lane", args![provider.name.as_str(), buyer.public_key()]);
+        self.test.execute_expect_success(tx, vec![buyer.proof.clone()]);
+        self.test.return_values().last().unwrap().decoded::<u64>().expect("lane id")
+    }
+
+    fn open_lane_fails(&mut self, buyer: &Party, provider: &str, amount: u64, expected: &str) {
+        let tx = self.funded_call(buyer, amount, "open_lane", args![provider, buyer.public_key()]);
+        self.rejected(tx, vec![buyer.proof.clone()], expected);
     }
 
     fn claim_transaction(&self, claimer: &Party, lane_id: u64, spent_cum: Amount, signature: SignaturePayload) -> Transaction {
@@ -168,6 +175,25 @@ impl Network {
         self.test.execute_expect_success(transaction, vec![provider.proof.clone()]);
     }
 
+    fn refund_transaction(&self, buyer: &Party, lane_id: u64) -> Transaction {
+        self.test
+            .transaction()
+            .call_method(self.ledger, "refund", args![lane_id])
+            .put_last_instruction_output_on_workspace("refund")
+            .call_method(buyer.account, "deposit", args![Workspace("refund")])
+            .finish()
+            .seal(&buyer.key)
+    }
+
+    /// Refunds the lane and returns what came back to the buyer's account.
+    fn refund(&mut self, buyer: &Party, lane_id: u64) -> Amount {
+        let before = self.account_balance(buyer);
+        let tx = self.refund_transaction(buyer, lane_id);
+        self.test.execute_expect_success(tx, vec![buyer.proof.clone()]);
+        // The buyer's account also paid the transaction fee, which the test engine doesn't charge.
+        self.account_balance(buyer).checked_sub(before).unwrap()
+    }
+
     fn signed_call(&mut self, party: &Party, method: &str, args: Vec<NamedArg>) {
         let transaction = self.test.transaction().call_method(self.ledger, method, args).finish().seal(&party.key);
         self.test.execute_expect_success(transaction, vec![party.proof.clone()]);
@@ -184,21 +210,22 @@ impl Network {
         assert!(reason.contains(expected), "expected rejection containing {expected:?}, got: {reason}");
     }
 
-    fn listing(&mut self, name: &str) -> Option<String> {
-        self.test.call_method(self.ledger, "listing", args![name], vec![])
-    }
-
-    fn balance(&mut self, party: &Party) -> Amount {
-        self.test.call_method(self.ledger, "balance", args![party.public_key()], vec![])
-    }
-
-    /// `Lane` only implements CBOR decoding, so read it from a transaction's return value rather
+    /// The lane types only implement CBOR decoding, so read them from a transaction's return value rather
     /// than through `call_method` (which also requires serde).
-    fn lane(&mut self, lane_id: u64) -> lanes_ledger::Lane {
+    fn lane(&mut self, lane_id: u64) -> (LaneInfo, LaneState) {
         let transaction = self.test.transaction().call_method(self.ledger, "lane", args![lane_id]).finish().seal(&self.reader.key);
         self.test.execute_expect_success(transaction, vec![self.reader.proof.clone()]);
-        let lane: Option<lanes_ledger::Lane> = self.test.return_values()[0].decoded().expect("decode lane");
-        lane.expect("lane exists")
+        self.test.return_values()[0].decoded().expect("decode lane")
+    }
+
+    fn state(&mut self, lane_id: u64) -> LaneState {
+        self.lane(lane_id).1
+    }
+
+    fn config(&mut self) -> (ComponentAddress, ResourceAddress, u64, ResourceAddress, u64) {
+        let transaction = self.test.transaction().call_method(self.ledger, "config", args![]).finish().seal(&self.reader.key);
+        self.test.execute_expect_success(transaction, vec![self.reader.proof.clone()]);
+        self.test.return_values()[0].decoded().expect("decode config")
     }
 
     fn account_balance(&mut self, party: &Party) -> Amount {
@@ -209,20 +236,14 @@ impl Network {
         self.test.set_virtual_substate(VirtualSubstateId::CurrentEpoch, VirtualSubstate::CurrentEpoch(epoch));
     }
 
-    /// vault == buyer balances + unclaimed escrow in open lanes.
-    fn assert_conservation(&mut self, buyers: &[&Party], lanes: &[u64]) {
-        let vault: Amount = self.test.call_method(self.ledger, "vault_balance", args![], vec![]);
+    /// escrow == what every lane still holds.
+    fn assert_conservation(&mut self, lanes: &[u64]) {
+        let escrow: Amount = self.test.call_method(self.ledger, "escrow", args![], vec![]);
         let mut expected = Amount::zero();
-        for buyer in buyers {
-            expected = expected.checked_add(self.balance(buyer)).unwrap();
-        }
         for lane_id in lanes {
-            let lane = self.lane(*lane_id);
-            if !lane.closed {
-                expected = expected.checked_add(lane.deposited.checked_sub(lane.claimed).unwrap()).unwrap();
-            }
+            expected = expected.checked_add(self.state(*lane_id).remaining()).unwrap();
         }
-        assert_eq!(vault, expected, "ledger accounting does not conserve funds");
+        assert_eq!(escrow, expected, "ledger accounting does not conserve funds");
     }
 }
 
@@ -231,11 +252,11 @@ impl Network {
 #[test]
 fn settings_are_fixed_at_creation_and_nothing_is_admin_gated() {
     let mut network = Network::deploy();
-    let config: (ComponentAddress, ResourceAddress, u64) = network.test.call_method(network.ledger, "config", args![], vec![]);
-    assert_eq!(config, (network.directory, TARI_TOKEN, LANE_CLOSE_EPOCHS));
+    let (directory, payment, window, _lanes, count) = network.config();
+    assert_eq!((directory, payment, window, count), (network.directory, TARI_TOKEN, LANE_CLOSE_EPOCHS, 0));
 
-    // The old admin surface is gone: no fees, no pause, no parameter changes.
-    for method in ["withdraw_fees", "set_params", "set_paused", "fees_owed"] {
+    // No admin surface, and v0.2's buyer balances and listings are gone.
+    for method in ["withdraw_fees", "set_params", "set_paused", "deposit", "withdraw", "balance", "set_listing", "finalize_close"] {
         let tx = network.test.transaction().call_method(network.ledger, method, args![]).finish().seal(&network.reader.key);
         network.rejected(tx, vec![network.reader.proof.clone()], "");
     }
@@ -250,31 +271,6 @@ fn settings_are_fixed_at_creation_and_nothing_is_admin_gated() {
     network.rejected(tx, vec![network.reader.proof.clone()], "close window must be at least one epoch");
 }
 
-// ---- listings ----
-
-#[test]
-fn only_the_agents_current_key_sets_its_listing() {
-    let mut network = Network::deploy();
-    let mut alice = network.provider("alice");
-    let stranger = funded(&mut network.test);
-    let url = "https://ootlebook.example/services/summaries";
-
-    network.signed_call(&alice.party, "set_listing", args!["alice", url]);
-    assert_eq!(network.listing("alice").as_deref(), Some(url));
-    network.signed_call_fails(&stranger, "set_listing", args!["alice", "https://evil.example"], "only the agent's current key can do this");
-    network.signed_call_fails(&alice.party, "set_listing", args!["alice", "x".repeat(LISTING_MAX + 1)], "listing is too long");
-
-    // After a key rotation only the new key counts.
-    let old = Party { account: alice.party.account, proof: alice.party.proof.clone(), key: alice.party.key.clone() };
-    network.rotate(&mut alice, 0);
-    network.signed_call_fails(&old, "set_listing", args!["alice", "https://old-key.example"], "only the agent's current key can do this");
-    network.signed_call(&alice.party, "set_listing", args!["alice", ""]);
-    assert_eq!(network.listing("alice"), None);
-
-    network.retire(&alice, 1);
-    network.signed_call_fails(&alice.party, "set_listing", args!["alice", url], "that agent is retired");
-}
-
 // ---- lanes ----
 
 #[test]
@@ -283,12 +279,13 @@ fn lane_claims_pay_the_provider_in_full() {
     let provider = network.provider("alice");
     let buyer = funded(&mut network.test);
 
-    network.deposit(&buyer, 10_000);
     let lane_id = network.open_lane(&buyer, &provider, 6_000);
-    assert_eq!(network.balance(&buyer), Amount::from(4_000u64));
-    let lane = network.lane(lane_id);
-    assert_eq!((lane.provider.as_str(), lane.provider_key), ("alice", provider.party.public_key()));
-    network.assert_conservation(&[&buyer], &[lane_id]);
+    assert_eq!(lane_id, 1);
+    let (info, state) = network.lane(lane_id);
+    assert_eq!((info.id, info.buyer, info.provider.as_str(), info.provider_key), (1, buyer.public_key(), "alice", provider.party.public_key()));
+    assert_eq!(state.deposited, Amount::from(6_000u64));
+    assert_eq!(network.config().4, 1);
+    network.assert_conservation(&[lane_id]);
 
     let before = network.account_balance(&provider.party);
     network.claim(&provider.party, &buyer, lane_id, 1_000);
@@ -297,8 +294,8 @@ fn lane_claims_pay_the_provider_in_full() {
     // A later voucher pays only the new part.
     network.claim(&provider.party, &buyer, lane_id, 2_500);
     assert_eq!(network.account_balance(&provider.party).checked_sub(before).unwrap(), Amount::from(2_500u64));
-    assert_eq!(network.lane(lane_id).claimed, Amount::from(2_500u64));
-    network.assert_conservation(&[&buyer], &[lane_id]);
+    assert_eq!(network.state(lane_id).claimed, Amount::from(2_500u64));
+    network.assert_conservation(&[lane_id]);
 }
 
 #[test]
@@ -307,7 +304,6 @@ fn claims_reject_bad_vouchers() {
     let provider = network.provider("alice");
     let buyer = funded(&mut network.test);
     let stranger = funded(&mut network.test);
-    network.deposit(&buyer, 10_000);
     let lane_id = network.open_lane(&buyer, &provider, 5_000);
     let p = &provider.party;
 
@@ -326,17 +322,19 @@ fn claims_reject_bad_vouchers() {
     let transaction = network.claim_transaction(p, lane_id, Amount::from(5_001u64), too_much);
     network.rejected(transaction, vec![p.proof.clone()], "voucher exceeds the lane's escrow");
 
-    // Only the lane's provider may claim.
+    // Only the lane's provider may claim, and only lanes that exist.
     let valid = sign_voucher(&buyer.key, &network.ledger, lane_id, Amount::from(1_000u64));
     let transaction = network.claim_transaction(&stranger, lane_id, Amount::from(1_000u64), valid.clone());
     network.rejected(transaction, vec![stranger.proof.clone()], "only the lane's provider can claim");
+    let transaction = network.claim_transaction(p, 2, Amount::from(1_000u64), valid.clone());
+    network.rejected(transaction, vec![p.proof.clone()], "unknown lane");
 
     // The valid voucher works once; replaying it pays nothing more.
     let transaction = network.claim_transaction(p, lane_id, Amount::from(1_000u64), valid.clone());
     network.test.execute_expect_success(transaction, vec![p.proof.clone()]);
     let transaction = network.claim_transaction(p, lane_id, Amount::from(1_000u64), valid);
     network.rejected(transaction, vec![p.proof.clone()], "voucher does not exceed the amount already claimed");
-    network.assert_conservation(&[&buyer], &[lane_id]);
+    network.assert_conservation(&[lane_id]);
 }
 
 #[test]
@@ -344,13 +342,13 @@ fn only_the_lanes_voucher_key_can_sign_vouchers() {
     let mut network = Network::deploy();
     let provider = network.provider("alice");
     let buyer = funded(&mut network.test);
-    network.deposit(&buyer, 10_000);
 
     // The buyer keeps its wallet key in a wallet daemon and signs vouchers with a separate hot key.
     let voucher_secret = RistrettoSecretKey::random(&mut rand::rng());
-    network.signed_call(&buyer, "open_lane", args!["alice", Amount::from(5_000u64), pk(&voucher_secret)]);
-    let lane_id = network.test.return_values()[0].decoded::<u64>().expect("lane id");
-    assert_eq!(network.lane(lane_id).voucher_key, pk(&voucher_secret));
+    let tx = network.funded_call(&buyer, 5_000, "open_lane", args!["alice", pk(&voucher_secret)]);
+    network.test.execute_expect_success(tx, vec![buyer.proof.clone()]);
+    let lane_id = network.test.return_values().last().unwrap().decoded::<u64>().expect("lane id");
+    assert_eq!(network.lane(lane_id).0.voucher_key, pk(&voucher_secret));
 
     let spent_cum = Amount::from(1_000u64);
     let by_wallet_key = sign_voucher(&buyer.key, &network.ledger, lane_id, spent_cum);
@@ -360,7 +358,7 @@ fn only_the_lanes_voucher_key_can_sign_vouchers() {
     let by_voucher_key = sign_voucher(&voucher_secret, &network.ledger, lane_id, spent_cum);
     let transaction = network.claim_transaction(&provider.party, lane_id, spent_cum, by_voucher_key);
     network.test.execute_expect_success(transaction, vec![provider.party.proof.clone()]);
-    network.assert_conservation(&[&buyer], &[lane_id]);
+    network.assert_conservation(&[lane_id]);
 }
 
 #[test]
@@ -368,19 +366,14 @@ fn lanes_need_an_active_directory_agent() {
     let mut network = Network::deploy();
     let alice = network.provider("alice");
     let buyer = funded(&mut network.test);
-    network.deposit(&buyer, 10_000);
-    let amount = Amount::from(100u64);
 
-    network.signed_call_fails(&buyer, "open_lane", args!["nobody", amount, buyer.public_key()], "");
-    network.signed_call_fails(&buyer, "open_lane", args!["alice", Amount::from(10_001u64), buyer.public_key()], "insufficient balance");
-    network.signed_call_fails(&buyer, "open_lane", args!["alice", Amount::zero(), buyer.public_key()], "lane amount must be positive");
-
+    network.open_lane_fails(&buyer, "nobody", 100, "");
+    network.open_lane_fails(&buyer, "alice", 0, "lane amount must be positive");
     // An agent can't open a lane to itself.
-    network.deposit(&alice.party, 1_000);
-    network.signed_call_fails(&alice.party, "open_lane", args!["alice", amount, alice.party.public_key()], "cannot open a lane to yourself");
+    network.open_lane_fails(&alice.party, "alice", 100, "cannot open a lane to yourself");
 
     network.retire(&alice, 0);
-    network.signed_call_fails(&buyer, "open_lane", args!["alice", amount, buyer.public_key()], "that agent is retired");
+    network.open_lane_fails(&buyer, "alice", 100, "that agent is retired");
 }
 
 #[test]
@@ -388,7 +381,6 @@ fn a_lane_stays_with_the_key_it_was_opened_to() {
     let mut network = Network::deploy();
     let mut alice = network.provider("alice");
     let buyer = funded(&mut network.test);
-    network.deposit(&buyer, 10_000);
     let old_lane = network.open_lane(&buyer, &alice, 3_000);
     let old = Party { account: alice.party.account, proof: alice.party.proof.clone(), key: alice.party.key.clone() };
 
@@ -404,37 +396,50 @@ fn a_lane_stays_with_the_key_it_was_opened_to() {
 
     // New lanes go to the new key.
     let new_lane = network.open_lane(&buyer, &alice, 1_000);
-    assert_eq!(network.lane(new_lane).provider_key, alice.party.public_key());
+    assert_eq!(network.lane(new_lane).0.provider_key, alice.party.public_key());
     network.claim(&alice.party, &buyer, new_lane, 200);
-    network.assert_conservation(&[&buyer], &[old_lane, new_lane]);
+    network.assert_conservation(&[old_lane, new_lane]);
 }
 
 #[test]
-fn closing_a_lane_waits_for_the_window_and_returns_the_remainder() {
+fn closing_a_lane_waits_for_the_window_and_refunds_the_remainder() {
     let mut network = Network::deploy();
     let provider = network.provider("alice");
     let buyer = funded(&mut network.test);
-    network.deposit(&buyer, 10_000);
+    let stranger = funded(&mut network.test);
     let lane_id = network.open_lane(&buyer, &provider, 5_000);
     network.claim(&provider.party, &buyer, lane_id, 1_000);
 
+    let tx = network.refund_transaction(&buyer, lane_id);
+    network.rejected(tx, vec![buyer.proof.clone()], "close was not requested");
+    network.signed_call_fails(&stranger, "request_close", args![lane_id], "only the lane's buyer can close it");
+
     network.set_epoch(10);
     network.signed_call(&buyer, "request_close", args![lane_id]);
-    network.signed_call_fails(&buyer, "finalize_close", args![lane_id], "close window has not passed");
-    network.signed_call_fails(&buyer, "fund_lane", args![lane_id, Amount::from(100u64)], "lane is closing or closed");
+    assert_eq!(network.state(lane_id).close_requested_epoch, Some(10));
+    network.signed_call_fails(&buyer, "request_close", args![lane_id], "close was already requested");
+    let tx = network.refund_transaction(&buyer, lane_id);
+    network.rejected(tx, vec![buyer.proof.clone()], "close window has not passed");
+    let tx = network.funded_call(&buyer, 100, "fund_lane", args![lane_id]);
+    network.rejected(tx, vec![buyer.proof.clone()], "lane is closing or closed");
 
     // The provider can still claim its latest voucher inside the window.
     network.set_epoch(15);
     network.claim(&provider.party, &buyer, lane_id, 1_800);
-    network.signed_call_fails(&buyer, "finalize_close", args![lane_id], "close window has not passed");
+    let tx = network.refund_transaction(&buyer, lane_id);
+    network.rejected(tx, vec![buyer.proof.clone()], "close window has not passed");
 
-    // Anyone can finalize once the window has passed.
+    // Once the window has passed only the buyer can refund, and only once.
     network.set_epoch(16);
-    let anyone = funded(&mut network.test);
-    network.signed_call(&anyone, "finalize_close", args![lane_id]);
-    assert!(network.lane(lane_id).closed);
-    assert_eq!(network.balance(&buyer), Amount::from(5_000u64 + 3_200));
-    network.assert_conservation(&[&buyer], &[lane_id]);
+    let tx = network.refund_transaction(&stranger, lane_id);
+    network.rejected(tx, vec![stranger.proof.clone()], "only the lane's buyer can refund it");
+    assert_eq!(network.refund(&buyer, lane_id), Amount::from(3_200u64));
+    let state = network.state(lane_id);
+    assert!(state.closed);
+    assert_eq!((state.refunded, state.remaining()), (Amount::from(3_200u64), Amount::zero()));
+    let tx = network.refund_transaction(&buyer, lane_id);
+    network.rejected(tx, vec![buyer.proof.clone()], "nothing to refund");
+    network.assert_conservation(&[lane_id]);
 
     // Nothing more can be claimed from a closed lane.
     let late = sign_voucher(&buyer.key, &network.ledger, lane_id, Amount::from(2_000u64));
@@ -448,40 +453,45 @@ fn buyers_top_up_lanes_and_providers_release_them_early() {
     let provider = network.provider("alice");
     let buyer = funded(&mut network.test);
     let stranger = funded(&mut network.test);
-    network.deposit(&buyer, 10_000);
     let lane_id = network.open_lane(&buyer, &provider, 5_000);
-    network.signed_call(&buyer, "fund_lane", args![lane_id, Amount::from(1_000u64)]);
-    network.signed_call_fails(&stranger, "fund_lane", args![lane_id, Amount::from(1u64)], "only the lane's buyer can fund it");
-    assert_eq!(network.lane(lane_id).deposited, Amount::from(6_000u64));
+    let tx = network.funded_call(&buyer, 1_000, "fund_lane", args![lane_id]);
+    network.test.execute_expect_success(tx, vec![buyer.proof.clone()]);
+    let tx = network.funded_call(&stranger, 1, "fund_lane", args![lane_id]);
+    network.rejected(tx, vec![stranger.proof.clone()], "only the lane's buyer can fund it");
+    assert_eq!(network.state(lane_id).deposited, Amount::from(6_000u64));
     network.claim(&provider.party, &buyer, lane_id, 400);
 
     network.signed_call_fails(&buyer, "release_lane", args![lane_id], "only the lane's provider can release it");
     network.signed_call(&provider.party, "release_lane", args![lane_id]);
-    assert_eq!(network.balance(&buyer), Amount::from(4_000u64 + 5_600));
-    network.assert_conservation(&[&buyer], &[lane_id]);
+    network.signed_call_fails(&provider.party, "release_lane", args![lane_id], "lane is closed");
+
+    // A released lane refunds at once, with no close window.
+    assert_eq!(network.refund(&buyer, lane_id), Amount::from(5_600u64));
+    network.assert_conservation(&[lane_id]);
 }
 
 #[test]
-fn buyers_withdraw_unallocated_funds() {
+fn lanes_roll_over_into_a_new_page_vault() {
     let mut network = Network::deploy();
     let provider = network.provider("alice");
     let buyer = funded(&mut network.test);
-    network.deposit(&buyer, 10_000);
-    let lane_id = network.open_lane(&buyer, &provider, 5_000);
-    network.claim(&provider.party, &buyer, lane_id, 2_000);
-
-    network.signed_call_fails(&buyer, "withdraw", args![Amount::from(5_001u64)], "insufficient balance");
-    let before = network.account_balance(&buyer);
-    let transaction = network
-        .test
-        .transaction()
-        .call_method(network.ledger, "withdraw", args![Amount::from(5_000u64)])
-        .put_last_instruction_output_on_workspace("refund")
-        .call_method(buyer.account, "deposit", args![Workspace("refund")])
-        .finish()
-        .seal(&buyer.key);
-    network.test.execute_expect_success(transaction, vec![buyer.proof.clone()]);
-    assert_eq!(network.balance(&buyer), Amount::zero());
-    assert!(network.account_balance(&buyer) > before);
-    network.assert_conservation(&[&buyer], &[lane_id]);
+    // A transaction may emit at most 256 events (withdrawals emit some too), so open lanes in batches.
+    let ids: Vec<u64> = (1..=PAGE_SIZE + 1).collect();
+    for batch in ids.chunks(20) {
+        let mut builder = network.test.transaction();
+        for _ in batch {
+            builder = builder
+                .call_method(buyer.account, "withdraw", args![TARI_TOKEN, 10u64])
+                .put_last_instruction_output_on_workspace("funds")
+                .call_method(network.ledger, "open_lane", args!["alice", buyer.public_key(), Workspace("funds")]);
+        }
+        let tx = builder.finish().seal(&buyer.key);
+        network.test.execute_expect_success(tx, vec![buyer.proof.clone()]);
+    }
+    assert_eq!(network.config().4, PAGE_SIZE + 1);
+    let last = PAGE_SIZE + 1;
+    assert_eq!(network.lane(last).0.id, last);
+    network.claim(&provider.party, &buyer, last, 10);
+    network.claim(&provider.party, &buyer, 1, 5);
+    network.assert_conservation(&ids);
 }

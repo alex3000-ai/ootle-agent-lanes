@@ -8,7 +8,7 @@ resolver = "2"
 members = ["ledger", "tests"]
 
 [workspace.package]
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 license = "MIT"
 publish = false
@@ -26,7 +26,8 @@ tari_template_lib_types = "0.35"
 tari_crypto = "=0.24.0"
 
 [profile.release]
-opt-level = "s"
+# "z", not "s": publishing is charged steeply by code size (LaneLedger v0.3: 2.56 tTARI with "z", 3.14 with "s").
+opt-level = "z"
 lto = true
 codegen-units = 1
 panic = "abort"

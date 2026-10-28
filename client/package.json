@@ -1,9 +1,9 @@
 {
   "name": "ootle-agent-lanes-client",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
-  "description": "Clients for Ootle Agent Lanes: voucher keys and signatures, listings and lanes",
+  "description": "Clients for Ootle Agent Lanes: voucher keys and signatures, and every lane call",
   "bin": {
     "lane-voucher": "voucher.mjs",
     "ootle-lanes": "lanes.mjs"
@@ -15,5 +15,8 @@
   "dependencies": {
     "@noble/curves": "2.0.1",
     "@noble/hashes": "2.0.1"
+  },
+  "scripts": {
+    "test": "node --test test.mjs"
   }
 }

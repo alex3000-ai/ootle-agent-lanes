@@ -1511,7 +1511,7 @@ dependencies = [
 
 [[package]]
 name = "lanes_ledger"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "minicbor",
  "tari_template_lib",
@@ -1519,7 +1519,7 @@ dependencies = [
 
 [[package]]
 name = "lanes_tests"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "agent_directory",
  "lanes_ledger",

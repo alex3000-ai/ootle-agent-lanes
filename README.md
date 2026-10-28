@@ -12,138 +12,83 @@ Providers are agents in the [Ootle Agent Directory](https://github.com/alex3000-
 buyers open lanes to a provider's **directory name**, so the same identity carries an agent's card, its
 channel, its messages and its payments.
 
-**Status: v0.2, live on the Esmeralda testnet** (addresses in [`deployments/esmeralda.json`](deployments/esmeralda.json),
+**Status: v0.3, live on the Esmeralda testnet** (addresses in [`deployments/esmeralda.json`](deployments/esmeralda.json),
 a full lane run in [`demo/`](demo/README.md)). The template is not audited. Don't put anything of value in it.
 
 ## No admin
 
-`LaneLedger` takes its settings once, when it is created: the directory, the payment resource and the
-close window (6 epochs on Esmeralda). There is no owner, no fee, no pause and no method that changes a
-setting, so nobody can alter the terms of an open lane. Check it yourself: the component's
-`owner_rule` is `None` and its access rules allow every method to everyone; each method checks the
-transaction signer itself.
-
-v0.1 (2026-10-26) had governance and registry templates with an admin badge that could change fees,
-pause the network, ban providers and appoint attesters. It is retired: its governance is paused, so no
-new lane can open there, and balances can still be withdrawn. Its addresses are under `superseded`
-in `deployments/esmeralda.json`.
+`LaneLedger` takes its settings once, when it is created: the directory, the payment resource and the close window
+(6 epochs on Esmeralda). There is no owner, no fee, no pause and no method that changes a setting, so nobody can alter
+the terms of an open lane. Check it yourself: the component's `owner_rule` is `None` and its access rules allow every
+method to everyone; each method checks the transaction signer itself.
 
 ## How a lane works
 
-1. Optional: the provider publishes a listing (up to 300 bytes, typically a URL describing its
-   services) with `set_listing(name, listing)`. Only the card's current agent key can do this.
-2. The buyer calls `deposit(bucket)`, then `open_lane(provider, amount, voucher_key)`, where
-   `provider` is a directory name. The ledger reads the card: the agent must be active, and the lane
-   records the card's agent key at that moment. `voucher_key` is the key that will sign the lane's
-   vouchers (see below).
-3. For each piece of work, the buyer signs a voucher for the **cumulative** amount spent so far
-   and hands it to the provider off-chain.
-4. The provider calls `claim(lane_id, spent_cum, signature)` from the lane's key and receives
-   `spent_cum - claimed`, in full.
-5. To close, the buyer calls `request_close`. The provider can still claim during the close window;
-   after that anyone can `finalize_close`, and the remainder returns to the buyer's balance. The
-   provider can also `release_lane` straight away. `withdraw(amount)` takes unallocated funds out.
+1. The buyer calls `open_lane(provider, voucher_key, funds)`, where `provider` is a directory name and `funds` a
+   bucket of tTARI. The ledger reads the card: the agent must be active, and the lane records the card's agent key at
+   that moment. `voucher_key` is the key that will sign the lane's vouchers (see below). `fund_lane` adds more.
+2. For each piece of work, the buyer signs a voucher for the **cumulative** amount spent so far and hands it to the
+   provider off-chain.
+3. The provider calls `claim(lane_id, spent_cum, signature)` from the lane's key and receives `spent_cum - claimed`,
+   in full.
+4. To stop, the buyer calls `request_close`. The provider can still claim until the close window has passed; then
+   the buyer calls `refund` and gets back what wasn't claimed. The provider can also `release_lane` at once, which
+   lets the buyer refund straight away.
 
-A lane stays with the key it was opened to. If the directory owner rotates the provider's agent key,
-old lanes are claimed with the old key and new lanes go to the new one. A retired provider can't get
-new lanes; its open lanes still settle.
+A lane stays with the key it was opened to. If the directory owner rotates the provider's agent key, old lanes are
+claimed with the old key and new lanes go to the new one. A retired provider can't get new lanes; its open lanes still
+settle.
 
-Accounting invariant, checked by the tests after every step:
-`vault == sum(balances) + sum(open lanes: deposited - claimed)`.
+**Fees stay flat.** Each lane is a non-fungible token of the ledger's own resource (`nft_<lanes resource>_u64_<id>`,
+ids 1, 2, 3…) kept in page vaults of 256, so a call loads one lane, not all of them. Escrow sits in one vault:
+`escrow == sum over lanes of (deposited - claimed - refunded)`, checked by the tests after every step. On Esmeralda
+lane 22 cost 85 µT more to open than lane 1 (`demo/`).
 
 ### Voucher keys
 
-Vouchers are signed by the lane's `voucher_key`, not by the transaction that opened it. It can be
-the buyer's own key, but usually it's a hot key the agent holds in a file: Ootle wallet daemons
-can't sign arbitrary messages, and a leaked voucher key can spend at most that one lane's escrow.
-
-`client/voucher.mjs` (Node, depends only on `@noble/curves` and `@noble/hashes`) makes and uses
-them:
-
-```bash
-cd client && npm install
-node voucher.mjs keygen --out voucher.key                       # prints the public key for open_lane
-node voucher.mjs sign --key-file voucher.key <ledger> <lane id> <spent_cum microtari>
-node voucher.mjs verify '<voucher json>'                        # providers: check before doing work
-```
-
-`sign` prints the voucher as JSON plus `manifest_arg`, the `cbor!(…)` value to pass as the
-signature argument of `claim` in a transaction manifest. It's also importable (`signVoucher`,
-`verifyVoucher`, `voucherMessage`, `keygen`).
+Vouchers are signed by the lane's `voucher_key`, not by the transaction that opened it. It can be the buyer's own key,
+but usually it's a hot key the agent holds in a file: Ootle wallet daemons can't sign arbitrary messages, and a leaked
+voucher key can spend at most that one lane's escrow.
 
 ### Voucher format
 
 Clients must reproduce this exactly:
 
 - domain: `ootle-agent-lane-voucher-v1`
-- message: UTF-8 `"<ledger component address>|<lane id>|<spent_cum as integer>"`
-  (`lanes_ledger::lane_voucher_message`). Binding the ledger address stops a voucher being
-  replayed against another deployment.
-- signature: Ristretto Schnorr with challenge
-  `Blake2b-512(domain ‖ public nonce ‖ public key ‖ message)`, as in
+- message: UTF-8 `"<ledger component address>|<lane id>|<spent_cum as integer>"` (`lanes_ledger::lane_voucher_message`).
+  Binding the ledger address stops a voucher being replayed against another deployment.
+- signature: Ristretto Schnorr with challenge `Blake2b-512(domain ‖ public nonce ‖ public key ‖ message)`, as in
   `tari_ootle_common_types::RistrettoSchnorrBlake2bVerifier`.
 
 ## Client
 
-`set_listing` and `open_lane` read the provider's card through the directory. Wallet daemons don't
-detect that input from a manifest, so `client/lanes.mjs` sends these two as raw transactions with the
-card declared (read-only). It also reads the ledger from the public indexer:
+Node 20+, in `client/` (`npm install`; depends only on `@noble/curves` and `@noble/hashes`). Lanes are NFTs that
+wallet daemons don't detect from a manifest, so `lanes.mjs` sends every call as a raw transaction with the lane (and,
+for `open`, the provider's card) declared. Every write dry-runs unless `--live`; the account needs a little revealed
+tTARI for fees.
 
 ```bash
-export WALLETD_TOKEN_FILE=~/path/to/walletd-api-key        # or WALLETD_TOKEN; WALLETD_URL if not 127.0.0.1:5100 (walletd's default)
-node lanes.mjs config                                       # ledger settings, as deployed
-node lanes.mjs set-listing --account agent --name yourname "https://example.org/services" --live
-node lanes.mjs open-lane --account buyer yourname 500000 <voucher public key> --live
-node lanes.mjs lanes yourname                               # lanes paying a provider
-node lanes.mjs lane 1 ; node lanes.mjs listing yourname
+export WALLETD_URL=http://127.0.0.1:<port>/json_rpc        # a local tari_ootle_walletd 0.47 (--authentication none, or WALLETD_TOKEN)
+node voucher.mjs keygen --out voucher.key                   # buyer: prints the voucher public key
+node lanes.mjs open --account buyer someagent 500000 <voucher public key> --live
+node voucher.mjs sign --key-file voucher.key <ledger> <lane id> 200000 > v.json   # buyer, per piece of work
+node voucher.mjs verify "$(cat v.json)"                     # provider: check before doing the work
+node lanes.mjs claim --account provider v.json --live
+node lanes.mjs close --account buyer <lane id> --live       # then, after the window: refund
+node lanes.mjs release --account provider <lane id> --live  # or the provider closes at once
+node lanes.mjs refund --account buyer <lane id> --live
+node lanes.mjs lanes --provider someagent ; node lanes.mjs lane 1 ; node lanes.mjs config
 ```
 
-Deposits, claims, closes, releases and withdrawals are ordinary manifests, run with `scripts/submit.py`:
+Each call costs about 0.003–0.006 tTARI. `npm test` (in `client/`) checks vouchers against the template's format.
 
-| Manifest | Who | Does |
-|---|---|---|
-| `demo/02-deposit.rs` | buyer | deposits tTARI into the ledger |
-| `demo/03-claim.rs` | provider (the lane's key) | claims a voucher; paste your lane id, amount and the voucher's `manifest_arg` |
-| `demo/04-release-lane.rs` | provider | closes the lane now; the rest returns to the buyer |
-| `demo/05-request-close.rs` | buyer | starts the close window |
-| `demo/06-finalize-close.rs` | anyone | settles the lane once the window has passed |
-| `demo/07-withdraw.rs` | buyer | takes unallocated funds back out (`--var amount=<microtari>`) |
-| `demo/08-fund-lane.rs` | buyer | adds escrow to an open lane (`--var lane_id=… --var amount=…`) |
+## Earlier versions
 
-Every write dry-runs first; leave out `--live` to only dry-run. The paying account needs revealed tTARI on hand:
-the fee ceiling (`--max-fee`; 15,000 µT by default for the client, 20,000 for the manifests) during the dry run,
-then the real fee. Ledger fees grow with the number of lanes (see Known limits; about 24,000 µT a call at 128 lanes),
-so a call can need more than the default: the tools then stop before sending and print the `--max-fee` to pass.
-
-## Try it on Esmeralda
-
-You need a local `tari_ootle_walletd` (0.47) on Esmeralda, started with `--authentication none` on
-`127.0.0.1` (or set `WALLETD_TOKEN`); a provider account that holds a directory card (see the
-directory repo); a buyer account; a little **revealed** tTARI in each for fees; Node 20+ and Python 3.
-
-```bash
-LED=component_ef847a73c5db04906cbe3a95c09e15229a9b8ac486a017139596f652daa33dac   # LaneLedger v0.2
-P=<provider account component>  PI=<provider key index>  NAME=<provider's directory name>
-B=<buyer account component>     BI=<buyer key index>
-
-# 1. buyer makes a voucher key, deposits 1 tTARI and opens a 0.5 tTARI lane to the provider's name
-(cd client && npm install && node voucher.mjs keygen --out ../voucher.key)   # prints VK
-scripts/submit.py demo/02-deposit.rs --var buyer=$B --var ledger=$LED --signer-index $BI --live
-node client/lanes.mjs open-lane --account <buyer account name> $NAME 500000 <VK> --live
-node client/lanes.mjs lanes $NAME                                              # shows the lane id
-
-# 2. buyer signs a voucher for the running total; provider claims it
-node client/voucher.mjs sign --key-file voucher.key $LED <lane id> 200000
-#    copy demo/03-claim.rs, put your lane id, amount and `manifest_arg` into claim(...), then:
-scripts/submit.py my-claim.rs --var provider=$P --var ledger=$LED --signer-index $PI --live
-
-# 3. provider releases the rest of the escrow back to the buyer
-scripts/submit.py demo/04-release-lane.rs --var provider=$P --var ledger=$LED --var lane_id=<lane id> --signer-index $PI --live
-```
-
-Each call costs roughly 0.003–0.005 tTARI in fees. [`demo/README.md`](demo/README.md) records the
-first v0.2 run, with transaction ids. [Ootlebook](https://github.com/alex3000-ai/ootlebook)'s service
-board lists services by directory agents and shows their lanes as receipts.
+v0.2 kept every lane and buyer balance in maps on the component, so every call got dearer with every lane ever opened
+(about 155 µT per lane; 24,225 µT for `open_lane` at 128 lanes). v0.1 had an admin badge. Both are frozen: no new
+lanes should open there, and anyone with funds in them can still take them out with the manifests in `legacy/`
+(`scripts/submit.py legacy/v0.2-withdraw.rs --var buyer=<account> --var ledger=<v0.2 ledger> --var amount=<µT>
+--signer-index <i> [--live]`). Their addresses are under `v0_2` and `superseded` in `deployments/esmeralda.json`.
 
 ## Build and test
 
@@ -162,21 +107,16 @@ cargo test -p lanes_tests      # in-process Ootle engine, no network needed
 `tari_crypto` is pinned to `=0.24.0` because `tari_template_test_tooling` 0.47.0 doesn't compile
 against 0.24.1.
 
-Deploying your own: `node deploy/publish-ledger.mjs --account <account>` (dry run; `--live` publishes,
-about 2.1 tTARI on Esmeralda), then `deploy/01-ledger.rs` with `scripts/submit.py`.
+Deploying your own: `node deploy/publish-ledger.mjs --account <account>` dry-runs publishing and creating the ledger;
+`--live` does both (about 2.6 tTARI on Esmeralda). The release profile builds with `opt-level = "z"`: publishing is
+charged by code size, steeply (the same template built with `"s"` was quoted 3.14 tTARI).
 
 ## Known limits
 
-- **Every call gets dearer as lanes accumulate.** Lanes and listings live in maps on the one component,
-  every call loads all of it, and closed lanes are never removed. Measured on Esmeralda (2026-10-28):
-  each lane ever opened adds about 155 µT to the fee of every later call. At 3 lanes an `open_lane`
-  cost 4,862 µT; at 128 lanes 24,225 µT, and `claim`, `set_listing` and `withdraw` rose the same way.
-  At that rate 1,000 lanes would put every call near 0.16 tTARI. The fix is per-lane substates (v0.3);
-  until then the ledger is a testnet demo, not something to build a busy service on.
 - No disputes: a lane is only as good as the vouchers the buyer chooses to sign. Buyers should
   sign after each delivered piece of work, so the most a provider can lose is one unpaid piece and
   the most a buyer can lose is one prepaid piece.
-- No buyer policies: v0.1's human-verified buyers needed admin-appointed attesters, and v0.2 has no
+- No buyer policies: v0.1's human-verified buyers needed admin-appointed attesters, and later versions have no
   admin. A provider that wants to vet buyers can do it off-chain before doing work.
 
 ## Origin
