@@ -1,21 +1,36 @@
 {
   "network": "esmeralda",
-  "deployed": "2026-10-26",
+  "version": "0.2.0",
+  "deployed": "2026-10-28",
+  "indexer": "https://ootle-indexer-a.tari.com",
   "templates": {
-    "LanesGovernance": "template_7f7aa6eb23f44d5cf850aef47191e0fa1b919c204d93f57a2499b4a878296fed",
-    "AgentRegistry": "template_2dbadfde1744d6c58df8638a71596d32c118fd96bbc7a9b4dc473c4356273838",
-    "LaneLedger": "template_66b602222bc44ee0ed14cb9286a4bb65e12d15af44d6b7b3ae0e43e118dece00"
+    "LaneLedger": "template_b20c12261abf5ca6f00ded5756f41d9ec6dab4ffba95ce840cfd62c635d04b62"
   },
   "components": {
-    "governance": "component_e58f4160c3afd91902765e3f9cf1dd5877f4fb62c408e8f2e54da7f1cdf4a6bd",
-    "registry": "component_3affb3db07852d4c7a507e130b08204fc63500f29a52cf4fd073fdedb1f8af13",
-    "ledger": "component_ed14de2474cf07f45fdc8bbc05f1fbe6931580634e013650856ccf0d3d3483e2"
+    "ledger": "component_ef847a73c5db04906cbe3a95c09e15229a9b8ac486a017139596f652daa33dac"
   },
-  "admin_badge": "resource_e5c3c0441352d203608e04ffe0fde83d726161ef304b1c686ff84af2e61789bc",
+  "params": { "lane_close_epochs": 6 },
   "payment_resource": "resource_0101010101010101010101010101010101010101010101010101010101010101",
-  "params": { "fee_bps": 0, "lane_close_epochs": 6, "rules_hash": "0000000000000000000000000000000000000000000000000000000000000000" },
+  "directory": {
+    "repo": "https://github.com/alex3000-ai/ootle-agent-directory",
+    "component": "component_281ea63b22baea4522dbea6107ceda1f0ec09ae6ae2114c4def1c448d94e8f61",
+    "cards_resource": "resource_28dec551986103afdd74fb31d22ef13e301ee80c28d6eb56bfec2445272ae278"
+  },
+  "transactions": {
+    "publish_ledger": "8996dc200be151eb4fb23a596ed9c60702ed2c250af41b53f82867c2a0e0df6c",
+    "create_ledger": "dd649cb4159536affdadf24b37cd43bdef1b7b457653ed7f6ed6909fe6f456e9",
+    "pause_v0_1": "c83bf47fa77a610701104339b434171b690cec6e3acf32cb978af7853cda9d76"
+  },
   "superseded": {
-    "template_83b855c5fd4788ece185130b43fa9b39b03ac31d7908a309a1673487ceefa22b": "first LaneLedger template, before per-lane voucher keys; do not use",
-    "component_917424d6d7bd5396b486e3bb258ae43dc5ca4b95c819b3b453d563908c63a51f": "ledger component of that template; empty, do not use"
+    "note": "v0.1 (2026-10-26) had an admin badge that could change fees, pause, ban providers and appoint attesters. Its governance is paused, so no new lanes open there; balances can still be withdrawn. Do not use.",
+    "template_7f7aa6eb23f44d5cf850aef47191e0fa1b919c204d93f57a2499b4a878296fed": "LanesGovernance v0.1",
+    "template_2dbadfde1744d6c58df8638a71596d32c118fd96bbc7a9b4dc473c4356273838": "AgentRegistry v0.1",
+    "template_66b602222bc44ee0ed14cb9286a4bb65e12d15af44d6b7b3ae0e43e118dece00": "LaneLedger v0.1",
+    "template_83b855c5fd4788ece185130b43fa9b39b03ac31d7908a309a1673487ceefa22b": "first LaneLedger, before per-lane voucher keys",
+    "component_e58f4160c3afd91902765e3f9cf1dd5877f4fb62c408e8f2e54da7f1cdf4a6bd": "v0.1 governance (paused)",
+    "component_3affb3db07852d4c7a507e130b08204fc63500f29a52cf4fd073fdedb1f8af13": "v0.1 registry",
+    "component_ed14de2474cf07f45fdc8bbc05f1fbe6931580634e013650856ccf0d3d3483e2": "v0.1 ledger",
+    "component_917424d6d7bd5396b486e3bb258ae43dc5ca4b95c819b3b453d563908c63a51f": "first ledger; empty",
+    "resource_e5c3c0441352d203608e04ffe0fde83d726161ef304b1c686ff84af2e61789bc": "v0.1 admin badge (controls only the paused governance)"
   }
 }

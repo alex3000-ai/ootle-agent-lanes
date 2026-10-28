@@ -5,10 +5,10 @@
 #   PATH="$HOME/.cargo/bin:$PATH" cargo test
 [workspace]
 resolver = "2"
-members = ["governance", "registry", "ledger", "tests"]
+members = ["ledger", "tests"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 license = "MIT"
 publish = false

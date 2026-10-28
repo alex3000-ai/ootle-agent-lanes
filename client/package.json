@@ -1,11 +1,17 @@
 {
   "name": "ootle-agent-lanes-client",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
-  "description": "Voucher keys and signatures for Ootle Agent Lanes",
-  "bin": { "lane-voucher": "voucher.mjs" },
-  "exports": "./voucher.mjs",
+  "description": "Clients for Ootle Agent Lanes: voucher keys and signatures, listings and lanes",
+  "bin": {
+    "lane-voucher": "voucher.mjs",
+    "ootle-lanes": "lanes.mjs"
+  },
+  "exports": {
+    ".": "./voucher.mjs",
+    "./lanes": "./lanes.mjs"
+  },
   "dependencies": {
     "@noble/curves": "2.0.1",
     "@noble/hashes": "2.0.1"
