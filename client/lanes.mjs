@@ -98,14 +98,29 @@ const hexKey = (h) => {
   return [...Buffer.from(h, "hex")];
 };
 
-/** A ledger call that reads `provider`'s card: the card is declared read-only. */
+/** `name`'s card as the indexer has it: { status, channel } or null. Card state is [agent_key, owner_key,
+ *  messaging_address, description, channel, status, nonce, updated_epoch]. */
+export async function readCard(name) {
+  const got = await indexer(`/substates/${cardSubstate(name)}`);
+  const card = got?.state?.up?.substate?.NonFungible?.mutable_data;
+  if (!Array.isArray(card)) return null;
+  const channel = bytesHex(card[4]);
+  return { status: card[5] === 0 ? "active" : "retired", channel: channel ? `component_${channel}` : null };
+}
+
+/** A ledger call that reads `provider`'s card. The card is declared read-only, and so is the channel it points at:
+ *  reading a card loads the components it references, which walletd doesn't detect. */
 async function cardCall(flags, provider, method, args) {
   if (!validName(provider)) throw new Error(`invalid directory name "${provider}"`);
+  const card = await readCard(provider);
+  if (!card) throw new Error(`"${provider}" is not in the Ootle Agent Directory`);
+  if (card.status !== "active") throw new Error(`"${provider}" is retired in the directory`);
   const rpc = walletd();
   const acct = await accountInfo(rpc, flags.account || "agent");
   return submitInstructions(rpc, {
     feeAccount: acct.component, signerIndex: acct.index, instructions: [callMethod(deployment().ledger, method, args)],
-    inputs: [cardSubstate(provider)], indexer: deployment().indexer, live: flags.live === true, ceiling: Number(flags["max-fee"] ?? 50_000),
+    inputs: [cardSubstate(provider), ...(card.channel ? [card.channel] : [])], indexer: deployment().indexer,
+    live: flags.live === true, ceiling: Number(flags["max-fee"] ?? 15_000),
   });
 }
 

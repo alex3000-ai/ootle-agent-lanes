@@ -65,11 +65,12 @@ function unsigned({ feeAccount, maxFee, instructions, inputs, dryRun, network, m
 }
 
 /**
- * Dry-runs, then (with live) submits with max_fee set from the dry run. `inputs` are substates walletd must
+ * Dry-runs, then (with live) submits with max_fee set from the dry run. The account needs `ceiling` µT of revealed
+ * tTARI on hand for the dry run, so keep it near a few times a call's real cost (calls run about 3,000–7,000 µT). `inputs` are substates walletd must
  * declare beyond those it detects. Declare writes correctly: a dry run accepts a write to a read-only input,
  * but the network rejects it (and still charges the fee). Returns {dry_run, required_fee} or {transaction_id, fee, result}.
  */
-export async function submitInstructions(rpc, { feeAccount, signerIndex, instructions, inputs = [], live, ceiling = 50_000, network = 0x26, indexer = "https://ootle-indexer-a.tari.com" }) {
+export async function submitInstructions(rpc, { feeAccount, signerIndex, instructions, inputs = [], live, ceiling = 15_000, network = 0x26, indexer = "https://ootle-indexer-a.tari.com" }) {
   // Transactions expire: allow a few epochs from now, as walletd does for manifests.
   const stats = await (await fetch(`${indexer}/epoch-manager/stats`, { headers: { accept: "application/json" } })).json();
   const maxEpoch = Number(stats.current_epoch) + 3;
@@ -83,8 +84,11 @@ export async function submitInstructions(rpc, { feeAccount, signerIndex, instruc
     lock_ids: [],
   });
   const dry = await rpc("transactions.submit_dry_run", req(ceiling, true));
-  const reject = JSON.stringify(dry).match(/"Reject":\s*("[^"]*"|\{[^}]*\})/);
-  if (reject) throw new Error(`dry run rejected: ${reject[1].slice(0, 400)}`);
+  // A dry run "succeeds" even when the transaction would fail: the outcome is then Reject, or
+  // AcceptFeeRejectRest (the network takes the fee and rejects the rest). Treat both as a rejection.
+  const text = JSON.stringify(dry);
+  const failure = text.match(/"ExecutionFailure":\s*(\{[^}]*\})/)?.[1] ?? text.match(/"Reject":\s*("[^"]*"|\{[^}]*\})/)?.[1];
+  if (failure || /"(Reject|AcceptFeeRejectRest)"\s*:/.test(text)) throw new Error(`dry run rejected: ${(failure ?? "the transaction would fail").slice(0, 400)}`);
   const fee = Number(dry.required_fees ?? ceiling);
   // Dry runs have come in up to ~12% under the fee the network then required, so leave room.
   const maxFee = Math.min(ceiling, Math.ceil(fee * 1.25) + 500);

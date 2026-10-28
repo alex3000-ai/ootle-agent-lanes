@@ -98,8 +98,19 @@ node lanes.mjs lanes yourname                               # lanes paying a pro
 node lanes.mjs lane 1 ; node lanes.mjs listing yourname
 ```
 
-Deposits, claims, closes, releases and withdrawals are ordinary manifests (`demo/`). Every write
-dry-runs first; leave out `--live` to only dry-run.
+Deposits, claims, closes, releases and withdrawals are ordinary manifests, run with `scripts/submit.py`:
+
+| Manifest | Who | Does |
+|---|---|---|
+| `demo/02-deposit.rs` | buyer | deposits tTARI into the ledger |
+| `demo/03-claim.rs` | provider (the lane's key) | claims a voucher; paste your lane id, amount and the voucher's `manifest_arg` |
+| `demo/04-release-lane.rs` | provider | closes the lane now; the rest returns to the buyer |
+| `demo/05-request-close.rs` | buyer | starts the close window |
+| `demo/06-finalize-close.rs` | anyone | settles the lane once the window has passed |
+| `demo/07-withdraw.rs` | buyer | takes unallocated funds back out (`--var amount=<microtari>`) |
+
+Every write dry-runs first; leave out `--live` to only dry-run. The paying account needs revealed tTARI on hand:
+the fee ceiling (15,000 µT for the client, 20,000 for the manifests) during the dry run, then the real fee.
 
 ## Try it on Esmeralda
 
