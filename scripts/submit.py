@@ -51,7 +51,7 @@ def summarize(result):
 
     def walk(node):
         if isinstance(node, dict):
-            if str(node.get("topic", "")).startswith("lanes.") and node not in events:
+            if re.search(r"(^|\.)lanes\.", str(node.get("topic", ""))) and node not in events:
                 events.append(node)
             for value in node.values():
                 walk(value)
