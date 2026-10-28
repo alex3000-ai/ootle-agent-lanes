@@ -64,6 +64,21 @@ function unsigned({ feeAccount, maxFee, instructions, inputs, dryRun, network, m
   };
 }
 
+/** Why a transaction result would fail, or null: the reason of a Reject or AcceptFeeRejectRest outcome. */
+export function rejection(result) {
+  let reason = null;
+  const walk = (o) => {
+    if (reason !== null || !o || typeof o !== "object") return;
+    if ("Reject" in o) reason = o.Reject;
+    else if (Array.isArray(o.AcceptFeeRejectRest)) reason = o.AcceptFeeRejectRest[1] ?? "rejected";
+    else Object.values(o).forEach(walk);
+  };
+  walk(result);
+  if (reason === null) return null;
+  const inner = reason && typeof reason === "object" ? Object.values(reason)[0] : reason;
+  return (typeof inner === "string" ? inner : inner?.message ?? JSON.stringify(reason)).slice(0, 400);
+}
+
 /**
  * Dry-runs, then (with live) submits with max_fee set from the dry run. The account needs `ceiling` µT of revealed
  * tTARI on hand for the dry run, so keep it near a few times a call's real cost (calls run about 3,000–7,000 µT). `inputs` are substates walletd must
@@ -86,9 +101,8 @@ export async function submitInstructions(rpc, { feeAccount, signerIndex, instruc
   const dry = await rpc("transactions.submit_dry_run", req(ceiling, true));
   // A dry run "succeeds" even when the transaction would fail: the outcome is then Reject, or
   // AcceptFeeRejectRest (the network takes the fee and rejects the rest). Treat both as a rejection.
-  const text = JSON.stringify(dry);
-  const failure = text.match(/"ExecutionFailure":\s*(\{[^}]*\})/)?.[1] ?? text.match(/"Reject":\s*("[^"]*"|\{[^}]*\})/)?.[1];
-  if (failure || /"(Reject|AcceptFeeRejectRest)"\s*:/.test(text)) throw new Error(`dry run rejected: ${(failure ?? "the transaction would fail").slice(0, 400)}`);
+  const failure = rejection(dry);
+  if (failure) throw new Error(`dry run rejected: ${failure}`);
   const fee = Number(dry.required_fees ?? ceiling);
   // Dry runs have come in up to ~12% under the fee the network then required, so leave room.
   const maxFee = Math.min(ceiling, Math.ceil(fee * 1.25) + 500);
