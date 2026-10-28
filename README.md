@@ -165,8 +165,12 @@ about 2.1 tTARI on Esmeralda), then `deploy/01-ledger.rs` with `scripts/submit.p
 
 ## Known limits
 
-- State lives in maps on the component, so every call loads all lanes and listings. Fine for a
-  testnet; per-entry substates come once real usage shows the sizes.
+- **Every call gets dearer as lanes accumulate.** Lanes and listings live in maps on the one component,
+  every call loads all of it, and closed lanes are never removed. Measured on Esmeralda (2026-10-28):
+  each lane ever opened adds about 155 µT to the fee of every later call. At 3 lanes an `open_lane`
+  cost 4,862 µT; at 128 lanes 24,225 µT, and `claim`, `set_listing` and `withdraw` rose the same way.
+  At that rate 1,000 lanes would put every call near 0.16 tTARI. The fix is per-lane substates (v0.3);
+  until then the ledger is a testnet demo, not something to build a busy service on.
 - No disputes: a lane is only as good as the vouchers the buyer chooses to sign. Buyers should
   sign after each delivered piece of work, so the most a provider can lose is one unpaid piece and
   the most a buyer can lose is one prepaid piece.

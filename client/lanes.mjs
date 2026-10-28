@@ -17,6 +17,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { ristretto255 } from "@noble/curves/ed25519.js";
 import { callMethod, cbor, submitInstructions } from "./tx.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -95,6 +96,9 @@ export const validName = (name) => /^[a-z0-9][a-z0-9_-]{1,31}$/.test(name);
 export const cardSubstate = (name) => `nft_${deployment().cards.replace("resource_", "")}_str_${name}`;
 const hexKey = (h) => {
   if (!/^[0-9a-f]{64}$/i.test(h)) throw new Error("voucher key must be 32 bytes of hex");
+  // The ledger accepts any 32 bytes, but no voucher can be signed for a key that isn't a curve point:
+  // the lane could then only be closed, after the close window.
+  try { ristretto255.Point.fromBytes(Buffer.from(h, "hex")); } catch { throw new Error("voucher key is not a valid Ristretto public key"); }
   return [...Buffer.from(h, "hex")];
 };
 
@@ -158,6 +162,6 @@ async function main(argv) {
   }
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main(process.argv.slice(2)).catch((e) => { console.error(e.message); process.exit(1); });
 }
