@@ -3,6 +3,8 @@
 
     scripts/submit.py MANIFEST [--var NAME=VALUE ...] [--signer-index N] [--max-fee MICROTARI] [--live]
 
+--max-fee (default 20000) is passed to the manifest as `max_fee`; the demo manifests pay it in fee_main.
+
 Without --live it only dry-runs. With --live it dry-runs first, submits only if the dry run is
 accepted, waits for the result, and prints the components, resources and lanes.* events it touched.
 
@@ -71,6 +73,8 @@ def main():
     args = parser.parse_args()
 
     variables = dict(v.split("=", 1) for v in args.var)
+    # The manifests pay `var!["max_fee"]` in fee_main.
+    variables.setdefault("max_fee", str(args.max_fee))
     params = {
         "manifest": open(args.manifest).read(),
         "variables": variables,
@@ -80,7 +84,13 @@ def main():
     }
     bearer = token()
     dry = rpc("transactions.submit_manifest", params, bearer)
-    print(f"dry run accepted, required fee {dry.get('required_fees')} microtari")
+    required = int(dry.get("required_fees") or 0)
+    print(f"dry run accepted, required fee {required} microtari")
+    # A dry run is accepted even when the fee it needs is above max_fee; the real transaction would then fail
+    # and still cost the fee. Dry runs have come in up to ~12% low, so leave a margin.
+    needed = required * 115 // 100 + 500
+    if needed > int(variables["max_fee"]):
+        sys.exit(f"the fee needed (about {needed} microtari with margin) is above --max-fee {variables['max_fee']}: rerun with --max-fee {needed}")
     if not args.live:
         return
 

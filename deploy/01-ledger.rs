@@ -5,7 +5,7 @@ use template_b20c12261abf5ca6f00ded5756f41d9ec6dab4ffba95ce840cfd62c635d04b62 as
 
 fn fee_main() {
     let account = var!["account"];
-    account.pay_fee(amount!(20000));
+    account.pay_fee(var!["max_fee"]);
 }
 
 fn main() {

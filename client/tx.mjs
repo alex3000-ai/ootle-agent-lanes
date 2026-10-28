@@ -104,8 +104,10 @@ export async function submitInstructions(rpc, { feeAccount, signerIndex, instruc
   const failure = rejection(dry);
   if (failure) throw new Error(`dry run rejected: ${failure}`);
   const fee = Number(dry.required_fees ?? ceiling);
-  // Dry runs have come in up to ~12% under the fee the network then required, so leave room.
-  const maxFee = Math.min(ceiling, Math.ceil(fee * 1.25) + 500);
+  // Dry runs have come in up to ~12% under the fee the network then required, so leave room. A dry run is
+  // accepted even when its fee is above the ceiling it ran with; the real transaction would then fail.
+  const maxFee = Math.ceil(fee * 1.25) + 500;
+  if (maxFee > ceiling) throw new Error(`this call needs a fee of about ${fee} µT (${maxFee} with margin), above the ${ceiling} µT ceiling: rerun with --max-fee ${maxFee}`);
   if (!live) return { dry_run: true, required_fee: fee };
   const sent = await rpc("transactions.submit", req(maxFee, false));
   const result = await rpc("transactions.wait_result", { transaction_id: sent.transaction_id, timeout_secs: 240 });

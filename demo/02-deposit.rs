@@ -3,7 +3,7 @@
 //   node client/lanes.mjs open-lane --account <buyer> <provider name> <microtari> <voucher public key> --live
 fn fee_main() {
     let buyer = var!["buyer"];
-    buyer.pay_fee(amount!(20000));
+    buyer.pay_fee(var!["max_fee"]);
 }
 
 fn main() {

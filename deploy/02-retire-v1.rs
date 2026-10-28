@@ -4,7 +4,7 @@
 //     --var governance=<v0.1 governance> --var badge=<v0.1 admin badge> [--live]
 fn fee_main() {
     let account = var!["account"];
-    account.pay_fee(amount!(20000));
+    account.pay_fee(var!["max_fee"]);
 }
 
 fn main() {

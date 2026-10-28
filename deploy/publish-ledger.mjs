@@ -31,7 +31,8 @@ if (!token) token = (await rpc("auth.request", { permissions: ["Admin"], credent
 
 const binary = readFileSync(WASM).toString("base64");
 const publish = (dry_run, max_fee) => rpc("transactions.publish_template", { binary, fee_account: { Name: account }, max_fee, detect_inputs: true, dry_run });
-const dry = await publish(true, 3_500_000);
+// A dry run reports the full fee even above its max_fee, so a low ceiling keeps the revealed funds it needs small.
+const dry = await publish(true, 1_000_000);
 console.log(`dry run fee ${dry.dry_run_fee} µT for a ${(readFileSync(WASM).length / 1024).toFixed(0)} KiB template`);
 if (!live) process.exit(0);
 // walletd charges the full max_fee, but dry runs have come in up to ~12% low: leave 15%.

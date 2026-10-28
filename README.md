@@ -111,7 +111,9 @@ Deposits, claims, closes, releases and withdrawals are ordinary manifests, run w
 | `demo/08-fund-lane.rs` | buyer | adds escrow to an open lane (`--var lane_id=… --var amount=…`) |
 
 Every write dry-runs first; leave out `--live` to only dry-run. The paying account needs revealed tTARI on hand:
-the fee ceiling (15,000 µT for the client, 20,000 for the manifests) during the dry run, then the real fee.
+the fee ceiling (`--max-fee`; 15,000 µT by default for the client, 20,000 for the manifests) during the dry run,
+then the real fee. Ledger fees grow with the number of lanes (see Known limits; about 24,000 µT a call at 128 lanes),
+so a call can need more than the default: the tools then stop before sending and print the `--max-fee` to pass.
 
 ## Try it on Esmeralda
 

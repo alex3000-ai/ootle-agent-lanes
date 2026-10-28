@@ -4,7 +4,7 @@
 // and paste its `manifest_arg` as the third argument to `claim`.
 fn fee_main() {
     let provider = var!["provider"];
-    provider.pay_fee(amount!(20000));
+    provider.pay_fee(var!["max_fee"]);
 }
 
 fn main() {

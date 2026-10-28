@@ -1,7 +1,7 @@
 // The buyer takes unallocated funds back out of the ledger into its account (amount in microtari).
 fn fee_main() {
     let buyer = var!["buyer"];
-    buyer.pay_fee(amount!(20000));
+    buyer.pay_fee(var!["max_fee"]);
 }
 
 fn main() {

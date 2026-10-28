@@ -2,7 +2,7 @@
 // buyer's ledger balance.
 fn fee_main() {
     let account = var!["account"];
-    account.pay_fee(amount!(20000));
+    account.pay_fee(var!["max_fee"]);
 }
 
 fn main() {
