@@ -9,7 +9,7 @@ accepted, waits for the result, and prints the components, resources and lanes.*
 --signer-index is the walletd account key index (`owner_key_id.Derived.index` in accounts.list)
 that seals the transaction; the account paying in `fee_main` must belong to that key.
 
-Environment: WALLETD_URL (default http://127.0.0.1:5102/json_rpc), WALLETD_TOKEN (optional bearer
+Environment: WALLETD_URL (default http://127.0.0.1:5100/json_rpc), WALLETD_TOKEN (optional bearer
 token; otherwise a short-lived Admin token is requested, which needs `--authentication none`).
 """
 
@@ -20,7 +20,7 @@ import re
 import sys
 import urllib.request
 
-URL = os.environ.get("WALLETD_URL", "http://127.0.0.1:5102/json_rpc")
+URL = os.environ.get("WALLETD_URL", "http://127.0.0.1:5100/json_rpc")
 
 
 def rpc(method, params, token=None, timeout=300):

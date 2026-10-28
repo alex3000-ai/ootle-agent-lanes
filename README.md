@@ -90,7 +90,7 @@ detect that input from a manifest, so `client/lanes.mjs` sends these two as raw 
 card declared (read-only). It also reads the ledger from the public indexer:
 
 ```bash
-export WALLETD_TOKEN_FILE=~/path/to/walletd-api-key        # or WALLETD_TOKEN; WALLETD_URL if not 127.0.0.1:5102
+export WALLETD_TOKEN_FILE=~/path/to/walletd-api-key        # or WALLETD_TOKEN; WALLETD_URL if not 127.0.0.1:5100 (walletd's default)
 node lanes.mjs config                                       # ledger settings, as deployed
 node lanes.mjs set-listing --account agent --name yourname "https://example.org/services" --live
 node lanes.mjs open-lane --account buyer yourname 500000 <voucher public key> --live

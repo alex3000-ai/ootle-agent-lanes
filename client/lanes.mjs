@@ -11,7 +11,7 @@
 // set-listing and open-lane read the provider's card through the directory, which walletd can't detect, so
 // they go through `transactions.submit` with the card declared as an input. Everything else (deposit,
 // claim, close, release, withdraw) works as ordinary manifests: see demo/. Writes dry-run unless --live.
-// Environment: WALLETD_URL (default http://127.0.0.1:5102/json_rpc), WALLETD_TOKEN or WALLETD_TOKEN_FILE,
+// Environment: WALLETD_URL (default http://127.0.0.1:5100/json_rpc), WALLETD_TOKEN or WALLETD_TOKEN_FILE,
 // OOTLE_INDEXER, LANES_LEDGER.
 
 import { existsSync, readFileSync } from "node:fs";
@@ -67,7 +67,7 @@ export async function readLedger(address = deployment().ledger) {
 // ---- writes ----
 
 function walletd() {
-  const url = process.env.WALLETD_URL || "http://127.0.0.1:5102/json_rpc";
+  const url = process.env.WALLETD_URL || "http://127.0.0.1:5100/json_rpc";
   const token = process.env.WALLETD_TOKEN ?? (process.env.WALLETD_TOKEN_FILE ? readFileSync(process.env.WALLETD_TOKEN_FILE, "utf8").trim() : undefined);
   let id = 0;
   return async (method, params) => {
