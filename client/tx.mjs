@@ -1,8 +1,13 @@
 // Copied from github.com/alex3000-ai/ootle-agent-directory (client/tx.mjs); keep the two in step.
 // Raw Ootle transactions through walletd `transactions.submit`, for calls whose inputs walletd can't detect
 // from a manifest: a channel reads its agent's card through the directory, so the card must be declared.
-// Arguments are CBOR, built here, so text needs no escaping.
+// Arguments are CBOR, built here, so text needs no escaping. Also the walletd connection, template publishing
+// and the small command-line helpers every client here shares.
 
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
+export const TARI = "resource_" + "01".repeat(32);
 const hex = (b) => Buffer.from(b).toString("hex");
 
 function head(major, n) {
@@ -33,6 +38,18 @@ export const cbor = {
     if (!m) throw new Error(`not a component address: ${addr}`);
     return cbor.tag(128, cbor.bytes(Buffer.from(m[1], "hex")));
   },
+  resource: (addr) => {
+    const m = /^resource_([0-9a-f]{64})$/.exec(addr);
+    if (!m) throw new Error(`not a resource address: ${addr}`);
+    return cbor.tag(131, cbor.bytes(Buffer.from(m[1], "hex")));
+  },
+  /** A 32-byte key given as hex. */
+  key: (h, what = "key") => {
+    if (!/^[0-9a-f]{64}$/i.test(h ?? "")) throw new Error(`${what} must be 32 bytes of hex`);
+    return cbor.bytes([...Buffer.from(h, "hex")]);
+  },
+  /** SignaturePayload::RistrettoSchnorrBlake2b: [variant 0, [[public nonce, s]]]. */
+  signature: ({ public_nonce, signature }) => cbor.array([cbor.uint(0), cbor.array([cbor.array([cbor.key(public_nonce, "public nonce"), cbor.key(signature, "signature")])])]),
 };
 const lit = (bytes) => ({ Literal: hex(bytes) });
 
@@ -44,6 +61,10 @@ export const workspaceArg = (id) => ({ Workspace: { id, offset: null } });
 export const callMethodWs = (component, method, args) => ({
   CallMethod: { call: { Address: component }, method, args: args.map((a) => (a && a.ws !== undefined ? workspaceArg(a.ws) : lit(a))) },
 });
+/** Withdraws `amount` µT of TARI from the account into workspace 0, for a call that takes a bucket ({ws: 0}). */
+export const withdrawTari = (account, amount) => [callMethod(account, "withdraw", [cbor.resource(TARI), cbor.uint(amount)]), toWorkspace(0)];
+/** Deposits the bucket the previous instruction returned into the account. */
+export const depositReturned = (account) => [toWorkspace(1), callMethodWs(account, "deposit", [{ ws: 1 }])];
 
 function unsigned({ feeAccount, maxFee, instructions, inputs, dryRun, network, maxEpoch }) {
   return {
@@ -79,6 +100,9 @@ export function rejection(result) {
   return (typeof inner === "string" ? inner : inner?.message ?? JSON.stringify(reason)).slice(0, 400);
 }
 
+/** The max_fee to send for a dry run's fee: dry runs have come in up to ~12% under what the network then charged. */
+export const feeWithMargin = (fee) => Math.ceil(fee * 1.25) + 500;
+
 /**
  * Dry-runs, then (with live) submits with max_fee set from the dry run. The account needs `ceiling` µT of revealed
  * tTARI on hand for the dry run, so keep it near a few times a call's real cost (calls run about 3,000–7,000 µT). `inputs` are substates walletd must
@@ -104,9 +128,8 @@ export async function submitInstructions(rpc, { feeAccount, signerIndex, instruc
   const failure = rejection(dry);
   if (failure) throw new Error(`dry run rejected: ${failure}`);
   const fee = Number(dry.required_fees ?? ceiling);
-  // Dry runs have come in up to ~12% under the fee the network then required, so leave room. A dry run is
-  // accepted even when its fee is above the ceiling it ran with; the real transaction would then fail.
-  const maxFee = Math.ceil(fee * 1.25) + 500;
+  // A dry run is accepted even when its fee is above the ceiling it ran with; the real transaction would then fail.
+  const maxFee = feeWithMargin(fee);
   if (maxFee > ceiling) throw new Error(`this call needs a fee of about ${fee} µT (${maxFee} with margin), above the ${ceiling} µT ceiling: rerun with --max-fee ${maxFee}`);
   if (!live) return { dry_run: true, required_fee: fee };
   const sent = await rpc("transactions.submit", req(maxFee, false));
@@ -114,3 +137,79 @@ export async function submitInstructions(rpc, { feeAccount, signerIndex, instruc
   if (result.status !== "Accepted") throw new Error(`transaction ${sent.transaction_id}: ${result.status} ${JSON.stringify(result).slice(0, 600)}`);
   return { transaction_id: sent.transaction_id, fee: result.final_fee, result };
 }
+
+// ---- walletd ----
+
+/**
+ * JSON-RPC to tari_ootle_walletd at WALLETD_URL (default http://127.0.0.1:5100/json_rpc), with WALLETD_TOKEN or the
+ * token in WALLETD_TOKEN_FILE. With neither, it asks the daemon for a short-lived token, which only a daemon run with
+ * `--authentication none` grants.
+ */
+export function walletd() {
+  const url = process.env.WALLETD_URL || "http://127.0.0.1:5100/json_rpc";
+  let token = process.env.WALLETD_TOKEN ?? (process.env.WALLETD_TOKEN_FILE ? readFileSync(process.env.WALLETD_TOKEN_FILE, "utf8").trim() : undefined);
+  let id = 0;
+  const rpc = async (method, params) => {
+    if (!token && method !== "auth.request") token = (await rpc("auth.request", { permissions: ["Admin"], duration: null, credentials: "None" })).token;
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) },
+      body: JSON.stringify({ jsonrpc: "2.0", id: ++id, method, params }),
+    });
+    const body = await res.json();
+    if (body.error) throw new Error(`${method}: ${body.error.message}`);
+    return body.result;
+  };
+  return rpc;
+}
+
+/** A walletd account's component, public key and key index (the index seals its transactions). */
+export async function accountInfo(rpc, name) {
+  const { accounts } = await rpc("accounts.list", { offset: 0, limit: 100 });
+  const a = accounts.find((x) => x.account.name === name);
+  if (!a) throw new Error(`no walletd account named "${name}"`);
+  const index = a.account.owner_key_id?.Derived?.index;
+  if (index === undefined) throw new Error(`account "${name}" has no derived key index`);
+  return { component: a.account.component_address, key: a.account.owner_public_key, index };
+}
+
+/**
+ * Publishes a template binary from `account`: a dry run for the fee, then (with live) the real thing. Publishing is
+ * charged steeply by code size, so build with opt-level "z". Returns {dry_run_fee} or {template, transaction_id, fee}.
+ */
+export async function publishTemplate(rpc, { wasm, account, live }) {
+  const binary = readFileSync(wasm).toString("base64");
+  const publish = (dry_run, max_fee) => rpc("transactions.publish_template", { binary, fee_account: { Name: account }, max_fee, detect_inputs: true, dry_run });
+  // A dry run reports the full fee even above its max_fee, so a low ceiling keeps the revealed funds it needs small.
+  const dry = await publish(true, 1_000_000);
+  const failure = rejection(dry);
+  if (failure) throw new Error(`publish dry run rejected: ${failure}`);
+  if (!live) return { dry_run_fee: dry.dry_run_fee };
+  // walletd charges a publish its actual fee, so the margin over the dry run costs nothing.
+  const sent = await publish(false, feeWithMargin(dry.dry_run_fee));
+  const result = await rpc("transactions.wait_result", { transaction_id: sent.transaction_id, timeout_secs: 300 });
+  if (result.status !== "Accepted") throw new Error(`publish failed: ${JSON.stringify(result).slice(0, 800)}`);
+  return { template: JSON.stringify(result).match(/template_[0-9a-f]{64}/)?.[0], transaction_id: sent.transaction_id, fee: result.final_fee };
+}
+
+// ---- command line ----
+
+/** `--name value` and bare `--flag` (true) into flags; everything else into args. */
+export function parseArgs(argv) {
+  const flags = {}, args = [];
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i].startsWith("--")) flags[argv[i].slice(2)] = argv[i + 1] !== undefined && !argv[i + 1].startsWith("--") ? argv[++i] : true;
+    else args.push(argv[i]);
+  }
+  return { flags, args };
+}
+
+/** Prints the comment block at the top of a script (its usage) and exits: 0 when asked for, 1 for an unknown command. */
+export function usage(scriptUrl, cmd) {
+  const lines = readFileSync(fileURLToPath(scriptUrl), "utf8").split("\n").slice(1);
+  console.log(lines.slice(0, lines.findIndex((l) => !l.startsWith("//"))).map((l) => l.replace(/^\/\/ ?/, "")).join("\n"));
+  process.exit(cmd ? 1 : 0);
+}
+
+/** Prints a write's outcome: the dry run's fee, or the transaction. */
+export const report = (r, what) => console.log(r.dry_run ? `Dry run accepted (${what}): fee ${r.required_fee} µT. Add --live to send.` : `${what}: ${r.transaction_id} (fee ${r.fee} µT)`);

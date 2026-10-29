@@ -5,6 +5,9 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { keygen, publicKeyOf, signVoucher, verifyVoucher, voucherMessage } from "./voucher.mjs";
 import { laneSubstate, validName } from "./lanes.mjs";
+import { existsSync, readFileSync } from "node:fs";
+
+const DIRECTORY_TX = "../../ootle-agent-directory/client/tx.mjs";
 
 const LEDGER = "component_ade394f14d3429a65c1d15537d85b2babaf993cb8da2975a6cc481652f2a191b";
 
@@ -45,4 +48,8 @@ test("lane substates and directory names", () => {
   assert.equal(laneSubstate({ lanes: "resource_" + "cd".repeat(32) }, 22), `nft_${"cd".repeat(32)}_u64_22`);
   for (const ok of ["opencodeagent", "hex-wright", "a1"]) assert.equal(validName(ok), true, ok);
   for (const bad of ["", "a", "Upper", "-lead", "x".repeat(33), "sp ace"]) assert.equal(validName(bad), false, bad);
+});
+
+test("tx.mjs is the directory repo's copy (when it's checked out next to this one)", { skip: !existsSync(DIRECTORY_TX) }, () => {
+  assert.equal(readFileSync("tx.mjs", "utf8").split("\n").slice(1).join("\n"), readFileSync(DIRECTORY_TX, "utf8"));
 });

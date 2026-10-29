@@ -20,11 +20,10 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { ristretto255 } from "@noble/curves/ed25519.js";
-import { callMethod, callMethodWs, cbor, submitInstructions, toWorkspace } from "./tx.mjs";
+import { accountInfo, callMethod, callMethodWs, cbor, depositReturned, parseArgs, report, submitInstructions, usage, walletd, withdrawTari } from "./tx.mjs";
 import { verifyVoucher } from "./voucher.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const TARI = "resource_" + "01".repeat(32);
 
 export function deployment() {
   const path = join(HERE, "..", "deployments", "esmeralda.json");
@@ -87,55 +86,19 @@ export async function listLanes({ provider, buyer, limit = 50 } = {}) {
 
 // ---- writes ----
 
-function walletd() {
-  const url = process.env.WALLETD_URL || "http://127.0.0.1:5100/json_rpc";
-  let token = process.env.WALLETD_TOKEN ?? (process.env.WALLETD_TOKEN_FILE ? readFileSync(process.env.WALLETD_TOKEN_FILE, "utf8").trim() : undefined);
-  let id = 0;
-  const rpc = async (method, params) => {
-    // No token given: ask a `--authentication none` daemon for a short-lived one.
-    if (!token && method !== "auth.request") token = (await rpc("auth.request", { permissions: ["Admin"], credentials: "None" })).token;
-    const res = await fetch(url, {
-      method: "POST",
-      headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) },
-      body: JSON.stringify({ jsonrpc: "2.0", id: ++id, method, params }),
-    });
-    const body = await res.json();
-    if (body.error) throw new Error(`${method}: ${body.error.message}`);
-    return body.result;
-  };
-  return rpc;
-}
-
-async function accountInfo(rpc, name) {
-  const { accounts } = await rpc("accounts.list", { offset: 0, limit: 100 });
-  const a = accounts.find((x) => x.account.name === name);
-  if (!a) throw new Error(`no walletd account named "${name}"`);
-  const index = a.account.owner_key_id?.Derived?.index;
-  if (index === undefined) throw new Error(`account "${name}" has no derived key index`);
-  return { component: a.account.component_address, key: a.account.owner_public_key, index };
-}
-
 export const validName = (name) => /^[a-z0-9][a-z0-9_-]{1,31}$/.test(name);
 export const cardSubstate = (name) => `nft_${deployment().cards.replace("resource_", "")}_str_${name}`;
-const hex32 = (h, what) => {
-  if (!/^[0-9a-f]{64}$/i.test(h ?? "")) throw new Error(`${what} must be 32 bytes of hex`);
-  return [...Buffer.from(h, "hex")];
-};
 const voucherKey = (h) => {
-  const bytes = hex32(h, "voucher key");
+  const arg = cbor.key(h, "voucher key");
   // The ledger accepts any 32 bytes, but no voucher can be signed for a key that isn't a curve point: the lane
   // could then only be closed and refunded.
-  try { ristretto255.Point.fromBytes(Uint8Array.from(bytes)); } catch { throw new Error("voucher key is not a valid Ristretto public key"); }
-  return bytes;
+  try { ristretto255.Point.fromBytes(Buffer.from(h, "hex")); } catch { throw new Error("voucher key is not a valid Ristretto public key"); }
+  return arg;
 };
 const microtari = (v) => {
   if (!/^[1-9][0-9]*$/.test(String(v))) throw new Error("amount must be a positive whole number of microtari");
   return BigInt(v);
 };
-/** Withdraws `amount` of tTARI from the account into workspace 0. */
-const withdrawTo0 = (account, amount) => [callMethod(account, "withdraw", [cbor.tag(131, cbor.bytes(Buffer.from(TARI.replace("resource_", ""), "hex"))), cbor.uint(amount)]), toWorkspace(0)];
-/** Deposits the bucket the previous instruction returned into the account. */
-const depositBack = (account) => [toWorkspace(1), callMethodWs(account, "deposit", [{ ws: 1 }])];
 
 /** `name`'s card as the indexer has it: { agent_key, status, channel } or null. Card state is [agent_key, owner_key,
  *  messaging_address, description, channel, status, nonce, updated_epoch]. */
@@ -174,7 +137,7 @@ export const openLane = (flags, provider, amount, key) =>
     if (card.status !== "active") throw new Error(`"${provider}" is retired in the directory`);
     if (acct.key === card.agent_key) throw new Error("cannot open a lane to yourself");
     return {
-      instructions: [...withdrawTo0(acct.component, microtari(amount)), callMethodWs(deployment().ledger, "open_lane", [cbor.text(provider), cbor.bytes(voucherKey(key)), { ws: 0 }])],
+      instructions: [...withdrawTari(acct.component, microtari(amount)), callMethodWs(deployment().ledger, "open_lane", [cbor.text(provider), voucherKey(key), { ws: 0 }])],
       // Reading a card cross-template loads the card and the channel it points at.
       inputs: [cardSubstate(provider), ...(card.channel ? [card.channel] : [])],
     };
@@ -184,7 +147,7 @@ export const fundLane = (flags, laneId, amount) =>
   send(flags, async (acct) => {
     const { lane, input } = await ownLane(acct, laneId, "buyer");
     if (lane.closed || lane.close_requested_epoch !== null) throw new Error(`lane ${laneId} is closing or closed`);
-    return { instructions: [...withdrawTo0(acct.component, microtari(amount)), callMethodWs(deployment().ledger, "fund_lane", [cbor.uint(laneId), { ws: 0 }])], inputs: [input] };
+    return { instructions: [...withdrawTari(acct.component, microtari(amount)), callMethodWs(deployment().ledger, "fund_lane", [cbor.uint(laneId), { ws: 0 }])], inputs: [input] };
   });
 
 export const claim = (flags, voucher) =>
@@ -198,9 +161,7 @@ export const claim = (flags, voucher) =>
     const spent = BigInt(voucher.spent_cum);
     if (spent <= BigInt(lane.claimed)) throw new Error(`the voucher (${spent}) doesn't exceed what's claimed (${lane.claimed})`);
     if (spent > BigInt(lane.deposited)) throw new Error(`the voucher (${spent}) exceeds the lane's escrow (${lane.deposited})`);
-    // SignaturePayload::RistrettoSchnorrBlake2b(signature): [variant 0, [[public nonce, s]]].
-    const signature = cbor.array([cbor.uint(0), cbor.array([cbor.array([cbor.bytes(hex32(voucher.public_nonce, "public nonce")), cbor.bytes(hex32(voucher.signature, "signature"))])])]);
-    return { instructions: [callMethod(ledger.address, "claim", [cbor.uint(laneId), cbor.uint(spent), signature]), ...depositBack(acct.component)], inputs: [input] };
+    return { instructions: [callMethod(ledger.address, "claim", [cbor.uint(laneId), cbor.uint(spent), cbor.signature(voucher)]), ...depositReturned(acct.component)], inputs: [input] };
   });
 
 export const requestClose = (flags, laneId) =>
@@ -227,17 +188,13 @@ export const refund = (flags, laneId) =>
       const ready = lane.close_requested_epoch + ledger.lane_close_epochs;
       if (Number(stats.current_epoch) < ready) throw new Error(`lane ${laneId} can be refunded from epoch ${ready} (now ${stats.current_epoch})`);
     }
-    return { instructions: [callMethod(ledger.address, "refund", [cbor.uint(laneId)]), ...depositBack(acct.component)], inputs: [input] };
+    return { instructions: [callMethod(ledger.address, "refund", [cbor.uint(laneId)]), ...depositReturned(acct.component)], inputs: [input] };
   });
 
 async function main(argv) {
   const [cmd, ...rest] = argv;
-  const flags = {}, args = [];
-  for (let i = 0; i < rest.length; i++) {
-    if (rest[i].startsWith("--")) flags[rest[i].slice(2)] = rest[i + 1] !== undefined && !rest[i + 1].startsWith("--") ? rest[++i] : true;
-    else args.push(rest[i]);
-  }
-  const done = (r, what) => console.log(r.dry_run ? `Dry run accepted (${what}): fee ${r.required_fee} µT. Add --live to send.` : `${what}: ${r.transaction_id} (fee ${r.fee} µT)`);
+  const { flags, args } = parseArgs(rest);
+  const done = report;
   const lane = () => {
     const id = Number(args[0]);
     if (!Number.isSafeInteger(id) || id < 1) throw new Error("lane id must be a positive integer");
@@ -266,7 +223,7 @@ async function main(argv) {
     case "release": need(1, "release --account A <lane id> [--live]"); done(await releaseLane(flags, lane()), `lane ${args[0]} released`); break;
     case "refund": need(1, "refund --account A <lane id> [--live]"); done(await refund(flags, lane()), `lane ${args[0]} refunded`); break;
     default:
-      console.log(readFileSync(fileURLToPath(import.meta.url), "utf8").split("\n").slice(1, 13).map((l) => l.replace(/^\/\/ ?/, "")).join("\n"));
+      usage(import.meta.url, cmd);
   }
 }
 
